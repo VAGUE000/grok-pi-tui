@@ -65,27 +65,10 @@ fn is_close_key(key: &KeyEvent) -> bool {
 }
 
 fn browse_key(state: &mut PiSettingsState, key: &KeyEvent) -> Outcome {
-    // While the sidebar owns the keyboard, Up/Down jump whole sections and
-    // Tab/Enter/Esc hand focus back to the rows.
-    if state.section_focus {
-        return match key.code {
-            KeyCode::Down | KeyCode::Char('j') => Outcome::changed_if(state.jump_section(1)),
-            KeyCode::Up | KeyCode::Char('k') => Outcome::changed_if(state.jump_section(-1)),
-            KeyCode::Left | KeyCode::Char('h') => Outcome::changed_if(state.cycle_tab(-1)),
-            KeyCode::Right | KeyCode::Char('l') => Outcome::changed_if(state.cycle_tab(1)),
-            KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter | KeyCode::Esc => {
-                state.section_focus = false;
-                Outcome::Changed
-            }
-            _ => Outcome::Unchanged,
-        };
-    }
-
     match key.code {
         // Reached only while a committed query is still filtering the list —
         // otherwise the modal chrome claims Esc and closes the panel.
         KeyCode::Esc if state.searching() => {
-            state.sync_tab_to_selection();
             state.query.reset();
             state.refresh_visible();
             state.clamp_selection();
@@ -93,18 +76,8 @@ fn browse_key(state: &mut PiSettingsState, key: &KeyEvent) -> Outcome {
         }
         KeyCode::Down | KeyCode::Char('j') => Outcome::changed_if(state.step(1)),
         KeyCode::Up | KeyCode::Char('k') => Outcome::changed_if(state.step(-1)),
-        // Descriptions live in the fixed block under the list, which frees the
-        // horizontal keys to move between tabs.
-        KeyCode::Left | KeyCode::Char('h') if key.modifiers.is_empty() => {
-            Outcome::changed_if(state.cycle_tab(-1))
-        }
-        KeyCode::Right | KeyCode::Char('l') if key.modifiers.is_empty() => {
-            Outcome::changed_if(state.cycle_tab(1))
-        }
-        // Tab parks the cursor on the section sidebar for fast hopping.
-        KeyCode::Tab | KeyCode::BackTab => Outcome::changed_if(state.toggle_section_focus()),
-        KeyCode::PageDown => Outcome::changed_if(state.jump_section(1)),
-        KeyCode::PageUp => Outcome::changed_if(state.jump_section(-1)),
+        KeyCode::PageDown => Outcome::changed_if(step_rows(state, 1)),
+        KeyCode::PageUp => Outcome::changed_if(step_rows(state, -1)),
         KeyCode::Char('g') if key.modifiers.is_empty() => Outcome::changed_if(state.jump_end(-1)),
         KeyCode::Char('G') => Outcome::changed_if(state.jump_end(1)),
         KeyCode::Char(' ') => match state.toggle_focused_bool() {
@@ -140,6 +113,14 @@ fn browse_key(state: &mut PiSettingsState, key: &KeyEvent) -> Outcome {
     }
 }
 
+fn step_rows(state: &mut PiSettingsState, delta: isize) -> bool {
+    let mut moved = false;
+    for _ in 0..PAGE_STEP {
+        moved |= state.step(delta);
+    }
+    moved
+}
+
 /// Open whatever the focused row leads to: a toggle, a chooser, a sub-sheet,
 /// an editor, or another modal entirely.
 fn activate_focused(state: &mut PiSettingsState) -> Outcome {
@@ -172,9 +153,6 @@ fn search_key(state: &mut PiSettingsState, key: &KeyEvent) -> Outcome {
     match key.code {
         KeyCode::Esc => {
             if state.searching() {
-                // Search doubles as navigation: land on the tab owning the
-                // focused result rather than snapping back to the start.
-                state.sync_tab_to_selection();
                 state.query.reset();
                 state.refresh_visible();
                 state.clamp_selection();
@@ -190,12 +168,10 @@ fn search_key(state: &mut PiSettingsState, key: &KeyEvent) -> Outcome {
         }
         KeyCode::Down => {
             let moved = state.step(1);
-            state.sync_tab_to_selection();
             Outcome::changed_if(moved)
         }
         KeyCode::Up => {
             let moved = state.step(-1);
-            state.sync_tab_to_selection();
             Outcome::changed_if(moved)
         }
         KeyCode::PageDown | KeyCode::PageUp => {
@@ -204,10 +180,8 @@ fn search_key(state: &mut PiSettingsState, key: &KeyEvent) -> Outcome {
             for _ in 0..PAGE_STEP {
                 moved |= state.step(delta);
             }
-            state.sync_tab_to_selection();
             Outcome::changed_if(moved)
         }
-        KeyCode::Tab => Outcome::Unchanged,
         KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
             if state.searching() {
                 state.query.reset();
@@ -232,7 +206,6 @@ fn apply_query_edit(state: &mut PiSettingsState, outcome: LineEditOutcome) -> Ou
         LineEditOutcome::TextChanged => {
             state.refresh_visible();
             state.clamp_selection();
-            state.sync_tab_to_selection();
             Outcome::Changed
         }
         LineEditOutcome::HandledNoChange | LineEditOutcome::CursorChanged => Outcome::Changed,
@@ -577,20 +550,6 @@ fn list_mouse(state: &mut PiSettingsState, kind: MouseEventKind, column: u16, ro
             if !on_list {
                 return Outcome::Unchanged;
             }
-            // A sidebar click jumps to that section's first row, mirroring the
-            // Tab + Up/Down keyboard path.
-            if let Some(section) = state
-                .sidebar_rects
-                .iter()
-                .position(|r| contains(*r, column, row))
-            {
-                let target = state.sections().get(section).map(|(_, first)| *first);
-                state.section_focus = false;
-                return match target {
-                    Some(target) => Outcome::changed_if(state.select_row(target)),
-                    None => Outcome::Unchanged,
-                };
-            }
             let Some(index) = state
                 .row_rects
                 .iter()
@@ -612,7 +571,6 @@ fn list_mouse(state: &mut PiSettingsState, kind: MouseEventKind, column: u16, ro
             );
             let was_focused = state.selected == index;
             state.select_row(index);
-            state.section_focus = false;
             if on_value || was_focused {
                 return activate_focused(state);
             }

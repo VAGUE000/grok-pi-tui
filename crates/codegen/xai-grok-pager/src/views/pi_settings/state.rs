@@ -2,15 +2,15 @@
 //!
 //! ## Row model
 //!
-//! [`PiSettingsState::rows`] holds every tab's rows in render order —
-//! a [`Row::Tab`] heading, then each section's [`Row::Section`] heading
-//! followed by its [`Row::Setting`]s. What is on screen is
+//! [`PiSettingsState::rows`] holds the complete settings page in render order:
+//! a [`Row::Category`] heading, each section's [`Row::Section`] heading, and
+//! the section's [`Row::Setting`]s. What is on screen is
 //! [`PiSettingsState::visible`], a list of indices into `rows`:
 //!
-//! - **Browsing** (empty query): the active tab's section headings and
-//!   settings. Tab headings are suppressed — the tab bar names the tab.
-//! - **Searching**: matching settings from *every* tab, each tab's block
-//!   introduced by its heading. Section headings are suppressed.
+//! - **Browsing** (empty query): every category, section, and setting in one
+//!   vertically scrollable page.
+//! - **Searching**: matching settings from every category, each category's
+//!   results introduced by its heading. Section headings are suppressed.
 //!
 //! ## Modes
 //!
@@ -40,11 +40,9 @@ pub const MODAL_TITLE: &str = "Settings";
 /// One entry in the flat row table.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
-    /// Tab heading. Rendered only in search results, where matches from
-    /// several tabs share one list.
-    Tab { category: SettingCategory },
-    /// Sidebar section heading; also drawn inline when the pane is too narrow
-    /// for the sidebar. Suppressed in search results.
+    /// Category heading for the single-page settings list.
+    Category { category: SettingCategory },
+    /// Inline section heading. Suppressed in search results.
     Section {
         category: SettingCategory,
         name: &'static str,
@@ -60,13 +58,6 @@ impl Row {
     pub fn is_setting(&self) -> bool {
         matches!(self, Self::Setting { .. })
     }
-
-    fn category(&self, registry: &SettingsRegistry) -> Option<SettingCategory> {
-        match self {
-            Self::Tab { category } | Self::Section { category, .. } => Some(*category),
-            Self::Setting { meta, .. } => registry.all().get(*meta).map(|m| m.category),
-        }
-    }
 }
 
 /// What the panel is doing right now. Crate-internal because the editing
@@ -74,7 +65,7 @@ impl Row {
 #[derive(Debug)]
 pub(crate) enum Mode {
     Browse,
-    /// `/` was pressed; the query filters settings across every tab.
+    /// `/` was pressed; the query filters settings across every category.
     Search,
     /// Enum / dynamic-enum chooser.
     Picking {
@@ -134,7 +125,7 @@ impl Mode {
     }
 
     /// Sub-panes take over the whole window; Browse and Search share the
-    /// tabbed list surface.
+    /// single-page list surface.
     pub fn is_sub_pane(&self) -> bool {
         !matches!(self, Self::Browse | Self::Search)
     }
@@ -188,20 +179,14 @@ pub struct PiSettingsState {
     pub ui_snapshot: UiConfig,
     pub pager_snapshot: PagerLocalSnapshot,
 
-    /// Every tab's rows, in render order.
+    /// Every category's rows, in single-page render order.
     pub rows: Vec<Row>,
-    /// Tabs with at least one visible row, in `SettingCategory::ALL` order.
-    pub tabs: Vec<SettingCategory>,
-    /// Index into [`Self::tabs`].
-    pub active_tab: usize,
     /// Indices into [`Self::rows`] that are currently on screen.
     pub visible: Vec<usize>,
     /// Index into [`Self::rows`] of the focused row.
     pub selected: usize,
     /// First visible row, as a position within [`Self::visible`].
     pub scroll: usize,
-    /// Keyboard drives the section sidebar rather than the rows.
-    pub section_focus: bool,
 
     pub(crate) mode: Mode,
     pub(super) query: LineEditor,
@@ -213,8 +198,6 @@ pub struct PiSettingsState {
     /// Click rect for each row's value column. Bool rows toggle, other kinds
     /// open their sub-pane.
     pub value_rects: Vec<Rect>,
-    /// Click rect per sidebar section, parallel to [`Self::sections`].
-    pub sidebar_rects: Vec<Rect>,
     /// Click rect per choice in `Picking` / `PickingGroup`.
     pub choice_rects: Vec<Rect>,
     /// `(decrement, increment)` rects for the Int stepper.
@@ -234,25 +217,20 @@ impl PiSettingsState {
         pager_snapshot: PagerLocalSnapshot,
     ) -> Self {
         let rows = build_rows(&registry);
-        let tabs = build_tabs(&rows);
         let mut state = Self {
-            window: ModalWindowState::with_tabs(tabs.len()),
+            window: ModalWindowState::new(),
             registry,
             ui_snapshot,
             pager_snapshot,
             rows,
-            tabs,
-            active_tab: 0,
             visible: Vec::new(),
             selected: 0,
             scroll: 0,
-            section_focus: false,
             mode: Mode::Browse,
             query: LineEditor::default(),
             list_area: Rect::default(),
             row_rects: Vec::new(),
             value_rects: Vec::new(),
-            sidebar_rects: Vec::new(),
             choice_rects: Vec::new(),
             stepper_rects: (Rect::default(), Rect::default()),
             hover: None,
@@ -279,23 +257,12 @@ impl PiSettingsState {
 
     /// Whether Esc means something inside the panel rather than "close it".
     /// The modal chrome consults this before claiming Esc, so backing out of a
-    /// search, a section focus, or a sub-pane never dismisses the panel.
+    /// search or a sub-pane never dismisses the panel.
     ///
     /// Search counts even with an empty query: `/` has already put the cursor
     /// in the search field, and Esc there means "leave the field".
     pub fn owns_escape(&self) -> bool {
-        self.mode.is_sub_pane()
-            || self.mode.kind() == ModeKind::Search
-            || self.searching()
-            || self.section_focus
-    }
-
-    pub fn active_category(&self) -> Option<SettingCategory> {
-        self.tabs.get(self.active_tab).copied()
-    }
-
-    pub fn tab_labels(&self) -> Vec<&'static str> {
-        self.tabs.iter().copied().map(layout::tab_label).collect()
+        self.mode.is_sub_pane() || self.mode.kind() == ModeKind::Search || self.searching()
     }
 
     /// The focused setting row, if the cursor is on one.
@@ -326,36 +293,6 @@ impl PiSettingsState {
         (key == "coding_data_sharing")
             .then_some(self.pager_snapshot.coding_data_sharing_lock)
             .flatten()
-    }
-
-    /// Sidebar sections of the current view as `(name, first row index)`.
-    /// Empty while searching — results are grouped by tab instead.
-    pub fn sections(&self) -> Vec<(&'static str, usize)> {
-        if self.searching() {
-            return Vec::new();
-        }
-        let mut sections = Vec::new();
-        let mut pending: Option<&'static str> = None;
-        for &row in &self.visible {
-            match self.rows.get(row) {
-                Some(Row::Section { name, .. }) => pending = Some(name),
-                Some(Row::Setting { .. }) => {
-                    if let Some(name) = pending.take() {
-                        sections.push((name, row));
-                    }
-                }
-                _ => {}
-            }
-        }
-        sections
-    }
-
-    /// Index into [`Self::sections`] of the section holding the focus.
-    pub fn active_section(&self) -> usize {
-        self.sections()
-            .iter()
-            .rposition(|(_, first)| *first <= self.selected)
-            .unwrap_or(0)
     }
 
     /// Enum choices for a key, with gated-off options removed. Covers both
@@ -404,42 +341,30 @@ impl PiSettingsState {
 
     // -- Row table ----------------------------------------------------------
 
-    /// Recompute [`Self::visible`] from the query and active tab.
+    /// Recompute [`Self::visible`] from the query across the complete page.
     pub(super) fn refresh_visible(&mut self) {
         let query = self.query.text();
         if query.is_empty() {
-            let Some(tab) = self.tabs.get(self.active_tab).copied() else {
-                self.visible.clear();
-                return;
-            };
-            self.visible = self
-                .rows
-                .iter()
-                .enumerate()
-                .filter(|(_, row)| {
-                    !matches!(row, Row::Tab { .. }) && row.category(&self.registry) == Some(tab)
-                })
-                .map(|(i, _)| i)
-                .collect();
+            self.visible = (0..self.rows.len()).collect();
             return;
         }
-        let matched: Vec<SettingKey> = self
+        let matched: std::collections::HashSet<SettingKey> = self
             .registry
             .search(query)
             .iter()
             .map(|meta| meta.key)
             .collect();
         let mut visible = Vec::new();
-        let mut pending_tab: Option<usize> = None;
+        let mut pending_category: Option<usize> = None;
         for (i, row) in self.rows.iter().enumerate() {
             match row {
-                // Emit a tab heading lazily, only once its tab has a match.
-                Row::Tab { .. } => pending_tab = Some(i),
+                // Emit a category heading lazily, only once its category has a match.
+                Row::Category { .. } => pending_category = Some(i),
                 Row::Section { .. } => {}
                 Row::Setting { key, .. } => {
                     if matched.contains(key) {
-                        if let Some(tab) = pending_tab.take() {
-                            visible.push(tab);
+                        if let Some(category) = pending_category.take() {
+                            visible.push(category);
                         }
                         visible.push(i);
                     }
@@ -453,17 +378,9 @@ impl PiSettingsState {
     /// kitty key releases). Keeps the focused key when it survives.
     pub fn rebuild_rows(&mut self) {
         let previous_key = self.focused().map(|(key, _)| key);
-        let previous_tab = self.active_category();
         let sub_pane_key = self.mode.subject();
 
         self.rows = build_rows(&self.registry);
-        self.tabs = build_tabs(&self.rows);
-        self.window.tab_count = self.tabs.len();
-        self.window.tab_rects = vec![None; self.tabs.len()];
-        self.active_tab = previous_tab
-            .and_then(|cat| self.tabs.iter().position(|t| *t == cat))
-            .unwrap_or(0);
-        self.window.active_tab = self.active_tab;
 
         // A sub-pane whose setting vanished has nothing left to edit.
         if let Some(key) = sub_pane_key
@@ -478,9 +395,6 @@ impl PiSettingsState {
             None => self.select_first_visible(),
         }
         self.clamp_selection();
-        if self.section_focus && self.sections().len() < 2 {
-            self.section_focus = false;
-        }
     }
 
     // -- Navigation ---------------------------------------------------------
@@ -550,97 +464,13 @@ impl PiSettingsState {
         }
     }
 
-    /// Focus a setting by key, switching to the tab that owns it.
+    /// Focus a setting by key. Returns whether the key was found.
     pub fn focus_key(&mut self, key: &str) -> bool {
         let Some(idx) = self.rows.iter().position(|r| row_key(r) == Some(key)) else {
             return false;
         };
         self.selected = idx;
-        // Deep links can target any tab; bring it forward before clamping, or
-        // the row is filtered out and the clamp snaps away from it.
-        if let Some(category) = self.rows[idx].category(&self.registry)
-            && let Some(tab) = self.tabs.iter().position(|t| *t == category)
-        {
-            self.active_tab = tab;
-            self.window.active_tab = tab;
-            self.section_focus = false;
-            self.refresh_visible();
-        }
         self.clamp_selection();
-        true
-    }
-
-    pub fn set_active_tab(&mut self, tab: usize) -> bool {
-        if tab >= self.tabs.len() || tab == self.active_tab {
-            return false;
-        }
-        self.active_tab = tab;
-        self.window.active_tab = tab;
-        self.section_focus = false;
-        self.scroll = 0;
-        self.hover = None;
-        // Tab switching is a browse gesture; it leaves any search behind.
-        self.query.reset();
-        self.mode = Mode::Browse;
-        self.refresh_visible();
-        self.select_first_visible();
-        true
-    }
-
-    pub fn cycle_tab(&mut self, delta: isize) -> bool {
-        if self.tabs.len() < 2 {
-            return false;
-        }
-        let len = self.tabs.len() as isize;
-        let next = (self.active_tab as isize + delta).rem_euclid(len) as usize;
-        self.set_active_tab(next)
-    }
-
-    /// Point the tab bar at whichever tab owns the focused row. Used while
-    /// searching, where results span tabs.
-    pub fn sync_tab_to_selection(&mut self) -> bool {
-        let Some(category) = self
-            .rows
-            .get(self.selected)
-            .and_then(|r| r.category(&self.registry))
-        else {
-            return false;
-        };
-        let Some(tab) = self.tabs.iter().position(|t| *t == category) else {
-            return false;
-        };
-        if tab == self.active_tab {
-            return false;
-        }
-        self.active_tab = tab;
-        self.window.active_tab = tab;
-        true
-    }
-
-    /// Move the focus to the first row of the section `delta` steps away.
-    pub fn jump_section(&mut self, delta: isize) -> bool {
-        let sections = self.sections();
-        if sections.len() < 2 {
-            return false;
-        }
-        let len = sections.len() as isize;
-        let next = (self.active_section() as isize + delta).rem_euclid(len) as usize;
-        let target = sections[next].1;
-        if target == self.selected {
-            return false;
-        }
-        self.selected = target;
-        true
-    }
-
-    /// Hand the keyboard to the section sidebar, if there is more than one
-    /// section to hop between.
-    pub fn toggle_section_focus(&mut self) -> bool {
-        let engage = !self.section_focus && self.sections().len() >= 2;
-        if engage == self.section_focus {
-            return false;
-        }
-        self.section_focus = engage;
         true
     }
 
@@ -847,7 +677,6 @@ impl PiSettingsState {
         self.list_area = Rect::default();
         self.row_rects.clear();
         self.value_rects.clear();
-        self.sidebar_rects.clear();
         self.choice_rects.clear();
         self.stepper_rects = (Rect::default(), Rect::default());
     }
@@ -902,8 +731,8 @@ pub(super) fn row_visible(
     true
 }
 
-/// Build the full row table: per category, a tab heading followed by each
-/// non-empty section's heading and its settings.
+/// Build the full single-page row table: per category, a category heading
+/// followed by each non-empty section's heading and its settings.
 fn build_rows(registry: &SettingsRegistry) -> Vec<Row> {
     let kitty = crate::app::kitty_releases_reported();
     let minimal = crate::app::minimal_mode_active();
@@ -935,10 +764,10 @@ fn build_rows(registry: &SettingsRegistry) -> Vec<Row> {
         if members.is_empty() {
             continue;
         }
-        rows.push(Row::Tab {
+        rows.push(Row::Category {
             category: *category,
         });
-        // Sidebar order comes from the layout table; inside a section the
+        // Section order comes from the layout table; inside a section the
         // registry's declaration order is preserved.
         for section in layout::sections_for(*category) {
             let mut emitted = false;
@@ -961,13 +790,4 @@ fn build_rows(registry: &SettingsRegistry) -> Vec<Row> {
         }
     }
     rows
-}
-
-fn build_tabs(rows: &[Row]) -> Vec<SettingCategory> {
-    rows.iter()
-        .filter_map(|row| match row {
-            Row::Tab { category } => Some(*category),
-            _ => None,
-        })
-        .collect()
 }

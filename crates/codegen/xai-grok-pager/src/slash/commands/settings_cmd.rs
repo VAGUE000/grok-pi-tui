@@ -27,7 +27,8 @@ impl SlashCommand for SettingsCommand {
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, _args: &str) -> CommandResult {
-        // Same surface as F2: the grok-pi settings panel.
+        // Same surface as F2: the canonical Grok settings modal with the
+        // grok-pi registry entries enabled.
         CommandResult::Action(Action::OpenPiSettings)
     }
 }

@@ -590,9 +590,8 @@ impl AgentView {
             }
         }
 
-        // grok-pi settings panel: the chrome owns close and tab switching,
-        // then the panel handles the rest. Sub-panes own their own Esc, so
-        // they bypass the chrome entirely.
+        // Legacy grok-pi settings state. Normal F2 and `/settings` use the
+        // canonical Settings modal above; keep this route for compatibility.
         if let ActiveModal::PiSettings { state } = modal {
             use crate::views::pi_settings;
             // Search, section focus, and sub-panes give Esc a local meaning,
@@ -2403,10 +2402,6 @@ impl AgentView {
                     self.active_modal = None;
                     return InputOutcome::Changed;
                 }
-                ModalWindowOutcome::TabChanged(index) => {
-                    state.set_active_tab(index);
-                    return InputOutcome::Changed;
-                }
                 ModalWindowOutcome::Handled => {
                     if matches!(mouse.kind, MouseEventKind::Moved) {
                         state.hover_row = None;
@@ -2459,8 +2454,8 @@ impl AgentView {
             };
         }
 
-        // grok-pi settings panel: the chrome owns close and tab clicks, the
-        // panel owns sidebar, row, and chooser hit testing.
+        // Legacy grok-pi settings state; normal opens use the canonical
+        // Settings modal and follow its stock mouse routing.
         if let Some(ActiveModal::PiSettings { state }) = &mut self.active_modal {
             let outcome =
                 mw::handle_modal_mouse(&mut state.window, mouse.kind, mouse.column, mouse.row);
@@ -2469,10 +2464,9 @@ impl AgentView {
                     self.active_modal = None;
                     InputOutcome::Changed
                 }
-                ModalWindowOutcome::TabChanged(index) => {
-                    state.set_active_tab(index);
-                    InputOutcome::Changed
-                }
+                // This legacy state has no tab bar; retain this arm for the
+                // shared modal outcome type.
+                ModalWindowOutcome::TabChanged(_) => InputOutcome::Changed,
                 ModalWindowOutcome::Handled => {
                     if matches!(mouse.kind, MouseEventKind::Moved) {
                         state.hover = None;

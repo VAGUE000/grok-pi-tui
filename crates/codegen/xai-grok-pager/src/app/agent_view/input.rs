@@ -1497,8 +1497,8 @@ impl AgentView {
                 });
                 InputOutcome::Changed
             }
-            // F2 opens the grok-pi panel; upstream's modal stays reachable via
-            // `Action::OpenSettings` for stock Grok code paths and its tests.
+            // F2 opens the canonical Grok settings modal through the Pi route;
+            // the shared registry supplies grok-pi's additional entries.
             ActionId::OpenSettings => InputOutcome::Action(Action::OpenPiSettings),
             ActionId::ToggleMouseCapture => {
                 crate::unified_log::info(

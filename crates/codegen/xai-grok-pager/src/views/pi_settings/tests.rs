@@ -9,7 +9,7 @@ use ratatui::layout::Rect;
 use super::state::{Mode, ModeKind, Outcome, PiSettingsState, Row};
 use super::{handle_key, render_pi_settings};
 use crate::app::actions::Action;
-use crate::settings::{PagerLocalSnapshot, SettingCategory, SettingKind, SettingsRegistry};
+use crate::settings::{PagerLocalSnapshot, SettingKind, SettingsRegistry};
 
 use xai_grok_shell::agent::config::UiConfig;
 
@@ -44,17 +44,22 @@ fn render_lines(state: &mut PiSettingsState, width: u16, height: u16) -> Vec<Str
 // -- Row table --------------------------------------------------------------
 
 #[test]
-fn rows_open_each_tab_with_a_heading_then_its_sections() {
+fn rows_open_with_category_headings_then_sections() {
     let state = state();
     let Some(first) = state.rows.first() else {
         panic!("registry must produce rows")
     };
     assert!(
-        matches!(first, Row::Tab { .. }),
-        "the table must open with a tab heading, got {first:?}",
+        matches!(first, Row::Category { .. }),
+        "the page must open with a category heading, got {first:?}",
     );
-    // Every section heading is immediately followed by at least one setting:
-    // empty sections are never emitted.
+    assert_eq!(
+        state.visible,
+        (0..state.rows.len()).collect::<Vec<_>>(),
+        "browse mode must expose the complete settings page",
+    );
+    // Every heading is followed by at least one setting before the next
+    // heading; empty sections and categories are never emitted.
     for (i, row) in state.rows.iter().enumerate() {
         if matches!(row, Row::Section { .. }) {
             assert!(
@@ -66,36 +71,17 @@ fn rows_open_each_tab_with_a_heading_then_its_sections() {
 }
 
 #[test]
-fn browsing_shows_only_the_active_tab_and_hides_tab_headings() {
+fn browsing_includes_all_categories_on_one_page() {
     let state = state();
-    let active = state.active_category().expect("a tab must be active");
-    for &row in &state.visible {
-        match &state.rows[row] {
-            Row::Tab { .. } => panic!("tab headings must be hidden while browsing"),
-            Row::Section { category, .. } => assert_eq!(*category, active),
-            Row::Setting { key, .. } => {
-                let meta = state.meta(key).expect("visible key must be registered");
-                assert_eq!(meta.category, active, "`{key}` leaked from another tab");
-            }
-        }
-    }
-}
-
-#[test]
-fn tabs_cover_every_category_that_has_visible_rows() {
-    let state = state();
-    let expected: Vec<SettingCategory> = SettingCategory::ALL
+    let categories = state
+        .visible
         .iter()
-        .copied()
-        .filter(|cat| {
-            state
-                .rows
-                .iter()
-                .any(|r| matches!(r, Row::Tab { category } if category == cat))
+        .filter_map(|&row| match state.rows[row] {
+            Row::Category { category } => Some(category),
+            _ => None,
         })
-        .collect();
-    assert_eq!(state.tabs, expected, "tab order must follow ALL order");
-    assert!(!state.tabs.is_empty(), "at least one tab must render");
+        .collect::<Vec<_>>();
+    assert!(categories.len() > 1, "the page must contain multiple categories");
 }
 
 #[test]
@@ -125,95 +111,23 @@ fn stepping_skips_headings_and_stops_at_the_ends() {
         steps += 1;
         assert!(steps < 500, "step(1) failed to terminate");
     }
-    assert!(steps > 0, "the first tab must have more than one row");
+    assert!(steps > 0, "the settings page must have more than one row");
     assert!(!state.step(1), "already at the bottom; must not wrap");
 }
 
 #[test]
-fn horizontal_keys_cycle_tabs_and_reset_the_focus() {
+fn horizontal_keys_do_not_switch_pages() {
     let mut state = state();
-    let first = state.active_category();
-    assert!(matches!(
-        press(&mut state, KeyCode::Right),
-        Outcome::Changed
-    ));
-    assert_ne!(
-        state.active_category(),
-        first,
-        "→ must move to the next tab"
-    );
-    assert!(
-        state.rows[state.selected].is_setting(),
-        "switching tabs must land on a selectable row",
-    );
-    assert!(matches!(press(&mut state, KeyCode::Left), Outcome::Changed));
-    assert_eq!(state.active_category(), first, "← must come back");
+    let selected = state.selected;
+    assert!(matches!(press(&mut state, KeyCode::Right), Outcome::Unchanged));
+    assert!(matches!(press(&mut state, KeyCode::Left), Outcome::Unchanged));
+    assert_eq!(state.selected, selected, "horizontal keys must not change pages");
 }
 
 #[test]
-fn tab_cycling_wraps_at_both_ends() {
-    let mut state = state();
-    let first = state.active_category();
-    for _ in 0..state.tabs.len() {
-        state.cycle_tab(1);
-    }
-    assert_eq!(
-        state.active_category(),
-        first,
-        "a full cycle must return home"
-    );
-    state.cycle_tab(-1);
-    assert_eq!(
-        state.active_category(),
-        state.tabs.last().copied(),
-        "stepping back from the first tab must wrap to the last",
-    );
-}
-
-#[test]
-fn tab_key_toggles_section_focus_and_up_down_then_jump_sections() {
-    let mut state = state();
-    assert!(
-        state.sections().len() >= 2,
-        "the Appearance tab needs several sections for this test",
-    );
-    assert!(matches!(press(&mut state, KeyCode::Tab), Outcome::Changed));
-    assert!(state.section_focus);
-
-    let before = state.active_section();
-    press(&mut state, KeyCode::Down);
-    assert_ne!(
-        state.active_section(),
-        before,
-        "with section focus, Down must jump a whole section",
-    );
-
-    press(&mut state, KeyCode::Tab);
-    assert!(!state.section_focus, "Tab must hand focus back to the rows");
-}
-
-#[test]
-fn section_focus_needs_at_least_two_sections() {
-    let mut state = state();
-    let privacy = state
-        .tabs
-        .iter()
-        .position(|c| *c == SettingCategory::Privacy)
-        .expect("Privacy tab must exist");
-    state.set_active_tab(privacy);
-    assert_eq!(state.sections().len(), 1);
-    assert!(
-        !state.toggle_section_focus(),
-        "a single-section tab has nowhere to hop",
-    );
-    assert!(!state.section_focus);
-}
-
-#[test]
-fn focus_key_switches_to_the_owning_tab() {
+fn focus_key_selects_any_setting_on_the_single_page() {
     let mut state = state();
     assert!(state.focus_key("coding_data_sharing"));
-    assert_eq!(state.active_category(), Some(SettingCategory::Privacy));
     assert_eq!(
         state.focused().map(|(key, _)| key),
         Some("coding_data_sharing"),
@@ -227,7 +141,7 @@ fn focus_key_switches_to_the_owning_tab() {
 // -- Search -----------------------------------------------------------------
 
 #[test]
-fn search_spans_every_tab_and_groups_results_by_tab_heading() {
+fn search_spans_every_category_and_groups_results_by_category_heading() {
     let mut state = state();
     press(&mut state, KeyCode::Char('/'));
     assert_eq!(state.mode.kind(), ModeKind::Search);
@@ -236,9 +150,9 @@ fn search_spans_every_tab_and_groups_results_by_tab_heading() {
     let headings = state
         .visible
         .iter()
-        .filter(|&&r| matches!(state.rows[r], Row::Tab { .. }))
+        .filter(|&&r| matches!(state.rows[r], Row::Category { .. }))
         .count();
-    assert!(headings >= 1, "results must be grouped under tab headings");
+    assert!(headings >= 1, "results must be grouped under category headings");
     assert!(
         state
             .visible
@@ -255,12 +169,12 @@ fn search_spans_every_tab_and_groups_results_by_tab_heading() {
 }
 
 #[test]
-fn a_tab_heading_is_emitted_once_per_tab_and_only_when_it_matches() {
+fn a_category_heading_is_emitted_once_and_only_when_it_matches() {
     let mut state = state();
     state.set_query("theme");
     let mut seen = Vec::new();
     for &row in &state.visible {
-        if let Row::Tab { category } = state.rows[row] {
+        if let Row::Category { category } = state.rows[row] {
             assert!(
                 !seen.contains(&category),
                 "{category:?} heading emitted twice",
@@ -268,20 +182,20 @@ fn a_tab_heading_is_emitted_once_per_tab_and_only_when_it_matches() {
             seen.push(category);
         }
     }
-    // Every heading must be followed by at least one match, never left dangling.
+    // Every category heading must be followed by at least one match, never left dangling.
     for (position, &row) in state.visible.iter().enumerate() {
-        if matches!(state.rows[row], Row::Tab { .. }) {
+        if matches!(state.rows[row], Row::Category { .. }) {
             let next = state.visible.get(position + 1).map(|&r| &state.rows[r]);
             assert!(
                 next.is_some_and(|r| r.is_setting()),
-                "a tab heading with no matches must not be emitted",
+                "a category heading with no matches must not be emitted",
             );
         }
     }
 }
 
 #[test]
-fn escaping_search_lands_on_the_tab_owning_the_focused_result() {
+fn escaping_search_returns_to_the_single_page() {
     let mut state = state();
     press(&mut state, KeyCode::Char('/'));
     state.set_query("coding data");
@@ -296,9 +210,9 @@ fn escaping_search_lands_on_the_tab_owning_the_focused_result() {
     assert_eq!(state.mode.kind(), ModeKind::Browse);
     assert!(!state.searching(), "Esc must clear the query");
     assert_eq!(
-        state.active_category(),
-        Some(SettingCategory::Privacy),
-        "Esc must land on the tab owning the focused result",
+        state.visible,
+        (0..state.rows.len()).collect::<Vec<_>>(),
+        "Esc must restore the complete settings page",
     );
 }
 
@@ -306,7 +220,7 @@ fn escaping_search_lands_on_the_tab_owning_the_focused_result() {
 /// with a local "back out" meaning must claim it, or Esc dismisses the panel
 /// instead of undoing one step.
 #[test]
-fn escape_belongs_to_the_panel_while_searching_or_focused_on_sections() {
+fn escape_belongs_to_the_panel_while_searching_or_in_a_subpane() {
     let mut state = state();
     assert!(!state.owns_escape(), "plain browse lets the chrome close");
 
@@ -320,24 +234,9 @@ fn escape_belongs_to_the_panel_while_searching_or_focused_on_sections() {
     assert!(!state.searching(), "Esc must clear a committed query");
     assert!(!state.owns_escape(), "and hand Esc back to the chrome");
 
-    state.toggle_section_focus();
-    assert!(state.owns_escape(), "section focus owns Esc");
-    press(&mut state, KeyCode::Esc);
-    assert!(!state.section_focus, "Esc must leave section focus");
-
     state.focus_key("theme");
     press(&mut state, KeyCode::Enter);
     assert!(state.owns_escape(), "an open chooser owns Esc");
-}
-
-#[test]
-fn switching_tabs_abandons_an_active_search() {
-    let mut state = state();
-    state.set_query("theme");
-    assert!(state.searching());
-    state.cycle_tab(1);
-    assert!(!state.searching(), "a tab switch leaves search behind");
-    assert_eq!(state.mode.kind(), ModeKind::Browse);
 }
 
 // -- Activation -------------------------------------------------------------
@@ -503,33 +402,13 @@ fn f2_closes_from_every_mode() {
 // -- Rendering --------------------------------------------------------------
 
 #[test]
-fn the_wide_layout_draws_the_section_sidebar_and_the_divider() {
-    let mut state = state();
-    let lines = render_lines(&mut state, 140, 40);
-    let body = lines.join("\n");
-    assert!(
-        body.contains('\u{2502}'),
-        "the wide layout must draw a sidebar divider:\n{body}",
-    );
-    for (name, _) in state.sections() {
+fn all_terminal_widths_keep_section_names_inline() {
+    for (width, height) in [(60, 30), (100, 40), (112, 40), (140, 40)] {
+        let mut state = state();
+        let body = render_lines(&mut state, width, height).join("\n");
         assert!(
-            body.contains(name),
-            "sidebar must list section `{name}`:\n{body}",
-        );
-    }
-}
-
-#[test]
-fn the_narrow_layout_drops_the_sidebar_for_inline_headings() {
-    let mut state = state();
-    let lines = render_lines(&mut state, 60, 30);
-    let body = lines.join("\n");
-    // Section names still appear, now as inline headings above their rows.
-    let first = state.sections().first().map(|(name, _)| *name);
-    if let Some(first) = first {
-        assert!(
-            body.contains(first),
-            "narrow layout must keep section names inline:\n{body}",
+            body.contains("Theme"),
+            "width {width} must render section names inline:\n{body}",
         );
     }
 }
@@ -552,11 +431,15 @@ fn the_focused_rows_description_renders_in_the_fixed_block() {
 }
 
 #[test]
-fn the_tab_bar_lists_every_tab_label() {
+fn the_single_page_renders_category_headings_without_a_tab_bar() {
     let mut state = state();
-    let body = render_lines(&mut state, 140, 40).join("\n");
-    for label in state.tab_labels() {
-        assert!(body.contains(label), "tab bar must show `{label}`:\n{body}");
+    let body = render_lines(&mut state, 140, 100).join("\n");
+    assert_eq!(state.window.tab_count, 0, "the single page must not render tabs");
+    for label in ["Appearance", "Popups", "Mouse", "Models", "Advanced"] {
+        assert!(
+            body.contains(label),
+            "single-page settings must render `{label}`:\n{body}"
+        );
     }
 }
 

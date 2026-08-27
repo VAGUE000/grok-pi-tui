@@ -762,7 +762,7 @@ fn initial_selection_skips_header() {
     let s = make_state();
     match &s.rows[s.selected] {
         RowEntry::Setting { key, .. } => assert_eq!(*key, "compact_mode"),
-        RowEntry::Header { .. } | RowEntry::Section { .. } => {
+        RowEntry::Header { .. } => {
             panic!("selection landed on a non-setting row")
         }
     }
@@ -4474,8 +4474,8 @@ fn compute_filtered_empty_query_returns_identity() {
         },
     ];
     let registry = SettingsRegistry::defaults();
-    let result = compute_filtered(&rows, &registry, "", Some(SettingCategory::Appearance));
-    assert_eq!(result, vec![1, 2]);
+    let result = compute_filtered(&rows, &registry, "");
+    assert_eq!(result, vec![0, 1, 2]);
 }
 
 #[test]
@@ -4497,7 +4497,6 @@ fn compute_filtered_excludes_header_when_no_children_match() {
         &rows,
         &registry,
         "xyzzy-no-match",
-        Some(SettingCategory::Appearance),
     );
     assert!(
         result.is_empty(),
@@ -4530,7 +4529,6 @@ fn compute_filtered_single_word_match_emits_header_then_setting() {
         &rows,
         &registry,
         "density",
-        Some(SettingCategory::Appearance),
     );
     assert_eq!(result, vec![0, 1], "header then compact_mode in order");
 }
@@ -4552,7 +4550,6 @@ fn compute_filtered_multi_word_and_match_narrows_further() {
         &rows,
         &registry,
         "compact density",
-        Some(SettingCategory::Appearance),
     );
     assert_eq!(result, vec![0, 1]);
 }
@@ -4809,7 +4806,6 @@ fn row_rects_shift_down_for_blank_lines_above_headers() {
         let expected_substring = match r {
             RowEntry::Header { category } => category.label().to_string(),
             RowEntry::Setting { meta_index, .. } => s.registry.all()[*meta_index].label.to_string(),
-            RowEntry::Section { name, .. } => name.to_string(),
         };
         assert!(
             row_text.contains(&expected_substring),

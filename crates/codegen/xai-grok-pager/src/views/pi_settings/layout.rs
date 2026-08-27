@@ -1,32 +1,12 @@
-//! Tab and sidebar-section taxonomy for the grok-pi settings panel.
+//! Category and section taxonomy for the grok-pi settings panel.
 //!
-//! Section membership is owned by [`crate::settings::layout`] so both this
-//! panel and the upstream `settings_modal` render the same sidebar. This
-//! module keeps only the panel-private helpers: the short [`tab_label`] used
-//! for the tab bar, and [`widest_section_name`] used to size the sidebar
-//! column so the divider never shifts when switching tabs.
+//! Section membership is owned by [`crate::settings::layout`] so this panel
+//! and the upstream `settings_modal` share the same setting groups. This
+//! module keeps the panel-specific render order for the single-page list.
 
 use crate::settings::SettingCategory;
 
 pub use crate::settings::layout::{OTHER_SECTION, section_for, sections_for};
-
-/// Short tab-bar label for a category. Tabs share one row, so these drop the
-/// `&`-conjunctions that `SettingCategory::label` carries.
-pub fn tab_label(category: SettingCategory) -> &'static str {
-    category.tab_label()
-}
-
-/// Widest declared section name across every tab. The sidebar column is sized
-/// from this so the divider never shifts when switching tabs.
-pub fn widest_section_name() -> usize {
-    use unicode_width::UnicodeWidthStr;
-    SettingCategory::ALL
-        .iter()
-        .flat_map(|cat| sections_for(*cat))
-        .map(|name| name.width())
-        .max()
-        .unwrap_or(0)
-}
 
 #[cfg(test)]
 mod tests {
@@ -44,7 +24,7 @@ mod tests {
             .collect();
         assert!(
             orphans.is_empty(),
-            "settings with no declared sidebar section: {orphans:?} — \
+            "settings with no declared section: {orphans:?} — \
              add them to crate::settings::layout::section_for",
         );
     }
@@ -78,13 +58,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn tab_labels_are_non_empty_and_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for category in SettingCategory::ALL {
-            let label = tab_label(*category);
-            assert!(!label.is_empty(), "empty tab label for {category:?}");
-            assert!(seen.insert(label), "duplicate tab label `{label}`");
-        }
-    }
 }

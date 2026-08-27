@@ -167,48 +167,33 @@ fn is_group_child(reg: &SettingsRegistry, key: &str) -> bool {
     })
 }
 
-/// Move keyboard selection to a given setting key via `j`.
-///
-/// The tabbed modal only exposes one category's rows at a time, so this first
-/// switches the active tab to the one owning `target` (when the target is in a
-/// different tab), then walks `j` within that tab's filtered set. The forward-
-/// only assertion is preserved for same-tab targets.
+/// Move keyboard selection to a given setting key via the flat list's `j` navigation.
 fn navigate_to(state: &mut SettingsModalState, target: &str) {
     let goal = row_idx_for(state, target);
 
-    // Switch to the tab that owns the target row so it is in the filtered set.
-    let target_tab = state.rows[goal].category(&state.registry);
-    if let Some(cat) = target_tab {
-        if let Some(tab_idx) = state.tabs.iter().position(|t| *t == cat) {
-            if state.active_tab != tab_idx {
-                state.set_active_tab(tab_idx);
-            }
-        }
+    // Each test starts at the first setting. Keep this helper defensive if a
+    // future fixture starts below the requested row.
+    if state.selected > goal {
+        let outcome = handle_settings_key(state, &press(KeyCode::Char('g')));
+        assert!(
+            matches!(outcome, SettingsKeyOutcome::Changed | SettingsKeyOutcome::Unchanged),
+            "navigate_to(`{target}`): failed to return to the top of the list"
+        );
     }
 
-    assert!(
-        state.selected <= goal || state.rows[goal].category(&state.registry) == target_tab,
-        "navigate_to(`{target}`): target row {goal} is not reachable from the current tab",
-    );
     let mut guard = 0;
     while state.selected != goal {
         let outcome = handle_settings_key(state, &press(KeyCode::Char('j')));
-        if matches!(outcome, SettingsKeyOutcome::Unchanged) {
-            // The target may live in a later tab; advance one tab and retry.
-            if state.active_tab + 1 < state.tabs.len() {
-                state.set_active_tab(state.active_tab + 1);
-                continue;
-            }
-            panic!(
-                "navigate_to(`{target}`): walked off the bottom of the row list \
-                 without finding the target (currently at row {})",
-                state.selected,
-            );
-        }
+        assert!(
+            matches!(outcome, SettingsKeyOutcome::Changed),
+            "navigate_to(`{target}`): target row {goal} is not reachable from row {}",
+            state.selected,
+        );
         guard += 1;
-        if guard > 200 {
-            panic!("navigate_to(`{target}`): runaway navigation (200+ keystrokes)");
-        }
+        assert!(
+            guard <= 200,
+            "navigate_to(`{target}`): runaway navigation (200+ keystrokes)"
+        );
     }
 }
 
@@ -1043,31 +1028,15 @@ fn filter_query_nonexistent_shows_zero_settings() {
     );
 }
 
-/// Empty query shows the active tab's setting rows (headers/sections excluded).
-/// The tabbed modal exposes one category at a time, so the empty-query
-/// filtered set is the active tab's settings, not every row in the registry.
+/// Empty query shows the complete flat list, including category headers.
 #[test]
 fn filter_empty_query_shows_all_rows() {
     let s = make_state();
-    let active = s.active_tab_category();
     let filtered = s.filtered_indices().to_vec();
-    let expected: Vec<usize> = s
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| matches!(r, RowEntry::Setting { .. }) && r.category(&s.registry) == active)
-        .map(|(i, _)| i)
-        .collect();
+    let expected: Vec<usize> = (0..s.rows.len()).collect();
     assert_eq!(
         filtered, expected,
-        "empty-query filtered set must equal the active tab's setting rows"
-    );
-    // And it must not span more than one tab.
-    assert!(
-        filtered
-            .iter()
-            .all(|&i| s.rows[i].category(&s.registry) == active),
-        "empty-query filtered set must not leak rows from other tabs"
+        "empty-query filtered set must include every flat-list row"
     );
 }
 
@@ -1075,7 +1044,6 @@ fn filter_empty_query_shows_all_rows() {
 #[test]
 fn filter_esc_clears_query_and_returns_to_browse() {
     let mut s = make_state();
-    let active = s.active_tab_category();
     let _ = handle_settings_key(&mut s, &press(KeyCode::Char('/')));
     for c in "stamp".chars() {
         let _ = handle_settings_key(&mut s, &press(KeyCode::Char(c)));
@@ -1087,18 +1055,12 @@ fn filter_esc_clears_query_and_returns_to_browse() {
     assert!(matches!(outcome, SettingsKeyOutcome::Changed));
     assert!(matches!(s.mode(), SettingsModalMode::Browse));
     assert_eq!(s.query(), "", "Esc must clear the query");
-    // Filter is inert again — active tab's setting rows restored in order.
-    let expected: Vec<usize> = s
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| matches!(r, RowEntry::Setting { .. }) && r.category(&s.registry) == active)
-        .map(|(i, _)| i)
-        .collect();
+    // The flat list is restored in its original order.
+    let expected: Vec<usize> = (0..s.rows.len()).collect();
     assert_eq!(
         s.filtered_indices(),
         expected.as_slice(),
-        "Esc must restore filtered_indices to the active tab's setting rows"
+        "Esc must restore every flat-list row"
     );
 }
 
@@ -1203,21 +1165,14 @@ fn filter_backspace_broadens_visible_set() {
         s.filtered_indices()
     );
 
-    // Final pop → "". Filter inert, active tab's rows restored in order.
+    // Final pop → "". The complete flat list is restored in order.
     let _ = handle_settings_key(&mut s, &press(KeyCode::Backspace));
     assert_eq!(s.query(), "");
-    let active = s.active_tab_category();
-    let expected: Vec<usize> = s
-        .rows
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| matches!(r, RowEntry::Setting { .. }) && r.category(&s.registry) == active)
-        .map(|(i, _)| i)
-        .collect();
+    let expected: Vec<usize> = (0..s.rows.len()).collect();
     assert_eq!(
         s.filtered_indices(),
         expected.as_slice(),
-        "empty query must re-broaden to the active tab's setting rows in order",
+        "empty query must restore every flat-list row in order",
     );
 }
 
@@ -4189,33 +4144,31 @@ fn click_on_setting_row_selects_it() {
     assert_eq!(s.selected, ts_idx);
 }
 
-/// `Right`/`Left` and their vim aliases `l`/`h` cycle tabs (the old
-/// expand/collapse binding was repurposed for tab navigation).
+/// `Right`/`Left` and their vim aliases `l`/`h` expand and collapse the
+/// focused row description in the single-list settings modal.
 #[test]
-fn right_left_and_vim_l_h_cycle_tabs() {
+fn right_left_and_vim_l_h_expand_and_collapse_rows() {
     let mut s = make_state();
-    let initial_tab = s.active_tab;
-    let tab_count = s.tabs.len();
-    assert!(tab_count >= 2, "modal must expose at least two tabs");
+    let key = s
+        .focused_setting()
+        .map(|(key, _)| key)
+        .expect("initial selection must be a setting row");
 
-    // Right advances the active tab.
     let outcome = handle_settings_key(&mut s, &press(KeyCode::Right));
     assert!(matches!(outcome, SettingsKeyOutcome::Changed));
-    assert_eq!(s.active_tab, (initial_tab + 1) % tab_count);
+    assert!(s.expanded_keys.contains(key));
 
-    // Left returns to the original tab.
     let outcome = handle_settings_key(&mut s, &press(KeyCode::Left));
     assert!(matches!(outcome, SettingsKeyOutcome::Changed));
-    assert_eq!(s.active_tab, initial_tab);
+    assert!(!s.expanded_keys.contains(key));
 
-    // `l` mirrors Right, `h` mirrors Left.
     let outcome = handle_settings_key(&mut s, &press(KeyCode::Char('l')));
     assert!(matches!(outcome, SettingsKeyOutcome::Changed));
-    assert_eq!(s.active_tab, (initial_tab + 1) % tab_count);
+    assert!(s.expanded_keys.contains(key));
 
     let outcome = handle_settings_key(&mut s, &press(KeyCode::Char('h')));
     assert!(matches!(outcome, SettingsKeyOutcome::Changed));
-    assert_eq!(s.active_tab, initial_tab);
+    assert!(!s.expanded_keys.contains(key));
 }
 
 /// The confirmation overlay renders the prompt text inline at the

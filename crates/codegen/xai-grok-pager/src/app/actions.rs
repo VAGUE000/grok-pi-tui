@@ -841,10 +841,10 @@ pub enum Action {
     /// Open the settings modal (F2, `/settings`, command palette).
     /// If already open, closes it instead of stacking.
     OpenSettings,
-    /// Open the grok-pi settings panel (F2, `/settings`, command palette).
-    /// If already open, closes it instead of stacking.
+    /// Open the canonical Grok settings modal for grok-pi (F2, `/settings`,
+    /// command palette). If already open, closes it instead of stacking.
     OpenPiSettings,
-    /// Open the grok-pi settings panel focused on a registry key.
+    /// Open the canonical grok-pi settings modal focused on a registry key.
     OpenPiSettingsFocus {
         key: &'static str,
     },

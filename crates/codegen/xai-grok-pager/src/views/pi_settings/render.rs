@@ -4,21 +4,23 @@
 //!
 //! ```text
 //! ┌─ Settings ─────────────────────────────────────────────┐
-//! │  Appearance  Mouse  Editor  Agent  …                    │  native tab bar
-//! │ ──────────────────────────────────────────────────────  │
-//! │  Theme       │ Theme                     Grok Night ›   │  sidebar │ pane
-//! │  Display     │ Auto dark theme           Grok Night ›   │
-//! │  Thinking    │ Compact mode                       on    │  dimmed: other section
+//! │  Appearance                                            │
+//! │    Theme                  Grok Night                 › │
+//! │    Display                Auto dark theme             › │
+//! │    Thinking               Compact mode             on  │
+//! │  Popups                                                │
+//! │    Tool details           Write/edit popups        on  │
 //! │                                                         │
 //! │  Color theme for the pager UI.                          │  fixed 3-row block
 //! │ ──────────────────────────────────────────────────────  │
-//! │  ↑/↓ nav · Space toggle · ←/→ tabs · / search · Esc      │
+//! │  ↑/↓ nav · Space toggle · Enter edit · / search · Esc   │
 //! └─────────────────────────────────────────────────────────┘
 //! ```
 //!
 //! Every list row is exactly one line high, so the scroll window is a plain
-//! slice of `state.visible`. Sub-panes (chooser, editors, reset confirm) take
-//! over the whole content area and drop the tab bar for a breadcrumb title.
+//! slice of `state.visible`; category and section names remain inline headings
+//! at every terminal width. Sub-panes (chooser, editors, reset confirm) take
+//! over the whole content area and use a breadcrumb title.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -26,7 +28,6 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
 
-use super::layout;
 use super::state::{Mode, ModeKind, PiSettingsState, Row};
 use crate::render::line_utils::truncate_str;
 use crate::settings::{
@@ -41,15 +42,7 @@ use crate::views::modal_window::{
 // Geometry
 // ---------------------------------------------------------------------------
 
-/// Widest sidebar name we render before truncating.
-const SIDEBAR_NAME_CAP: u16 = 22;
-const SIDEBAR_INDENT: u16 = 2;
-const SIDEBAR_GAP: u16 = 2;
-const SIDEBAR_SEPARATOR: &str = "\u{2502} ";
-const SIDEBAR_SEPARATOR_W: u16 = 2;
-/// Below this the value column starves, so the sidebar is dropped and section
-/// names render as inline headings instead.
-const MIN_PANE_W: u16 = 46;
+const DESCRIPTION_INDENT: u16 = 2;
 
 /// Cursor gutter — `› ` on the focused row, blank otherwise.
 const CURSOR_W: u16 = 2;
@@ -76,12 +69,6 @@ const ZDR_VALUE: &str = "ZDR";
 /// Appended to a team-managed row's value.
 const ADMIN_SUFFIX: &str = " \u{00B7} Admin Managed";
 
-/// Sidebar column width, derived from every section name in the layout table
-/// rather than the active tab's, so the divider never shifts between tabs.
-fn sidebar_width() -> u16 {
-    (layout::widest_section_name() as u16).min(SIDEBAR_NAME_CAP) + SIDEBAR_INDENT + SIDEBAR_GAP
-}
-
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -96,7 +83,7 @@ pub fn render_pi_settings(
     let theme = Theme::current();
     let shortcuts = build_shortcuts(state);
 
-    // Sub-panes wear a breadcrumb title and hand the tab row back as content.
+    // Sub-panes wear a breadcrumb title over the single-page settings list.
     let breadcrumb;
     let title: &str = match state.mode.subject().and_then(|key| state.meta(key)) {
         Some(meta) if state.mode.is_sub_pane() => {
@@ -111,11 +98,9 @@ pub fn render_pi_settings(
         _ => super::MODAL_TITLE,
     };
 
-    let browsing = !state.mode.is_sub_pane();
-    let tab_labels = state.tab_labels();
     let sizing = ModalSizing {
-        // The split sidebar plus settings pane needs more room than a plain
-        // single-column list.
+        // Keep the modal wide enough for setting labels and values without
+        // adding a second navigation column.
         width_pct: 0.86,
         max_width: MAX_MODAL_W,
         min_width: 44,
@@ -128,7 +113,7 @@ pub fn render_pi_settings(
 
     let config = ModalWindowConfig {
         title,
-        tabs: browsing.then_some(tab_labels.as_slice()),
+        tabs: None,
         shortcuts: &shortcuts,
         sizing,
         fold_info: None,
@@ -230,13 +215,12 @@ fn render_browse(buf: &mut Buffer, content: Rect, state: &mut PiSettingsState, t
     }
 }
 
-/// Paint the section sidebar and settings pane, and record their hit rects.
+/// Paint the inline section headings and settings rows, and record row hit rects.
 fn render_rows(buf: &mut Buffer, area: Rect, state: &mut PiSettingsState, theme: &Theme) {
     state.row_rects.clear();
     state.row_rects.resize(state.rows.len(), Rect::default());
     state.value_rects.clear();
     state.value_rects.resize(state.rows.len(), Rect::default());
-    state.sidebar_rects.clear();
 
     let viewport = area.height as usize;
     if viewport == 0 {
@@ -247,69 +231,35 @@ fn render_rows(buf: &mut Buffer, area: Rect, state: &mut PiSettingsState, theme:
         return;
     }
 
-    let sections = state.sections();
-    let active_section = state.active_section();
-    let sidebar_w = sidebar_width();
-    let split = sections.len() >= 2 && area.width >= sidebar_w + SIDEBAR_SEPARATOR_W + MIN_PANE_W;
-    let pane = if split {
-        render_sidebar(
-            buf,
-            area,
-            sidebar_w,
-            &sections,
-            active_section,
-            state,
-            theme,
-        );
-        Rect {
-            x: area.x + sidebar_w + SIDEBAR_SEPARATOR_W,
-            width: area.width - sidebar_w - SIDEBAR_SEPARATOR_W,
-            ..area
-        }
-    } else {
-        buf.set_style(area, Style::default().bg(theme.bg_base));
-        area
-    };
-
-    let active_range = split.then(|| active_section_range(&sections, active_section));
-    let label_w = label_column_width(state, pane.width);
+    buf.set_style(area, Style::default().bg(theme.bg_base));
+    let label_w = label_column_width(state, area.width);
     state.scroll = clamp_scroll(state, viewport);
     let end = state.visible.len().min(state.scroll + viewport);
     let window: Vec<usize> = state.visible[state.scroll..end].to_vec();
     let hover = state.hover;
-    let section_focus = state.section_focus;
 
     for (offset, row) in window.into_iter().enumerate() {
         let rect = Rect {
-            x: pane.x,
-            y: pane.y + offset as u16,
-            width: pane.width,
+            x: area.x,
+            y: area.y + offset as u16,
+            width: area.width,
             height: 1,
         };
         state.row_rects[row] = rect;
-        // Rows outside the section under the cursor recede so the active
-        // section reads as the foreground.
-        let dimmed = active_range.is_some_and(|(first, last)| row < first || row > last);
 
         match &state.rows[row] {
-            Row::Tab { category } => render_heading(buf, rect, category.label(), false, theme),
-            Row::Section { name, .. } => {
-                // The sidebar owns section names in the split layout; inline
-                // headings are the narrow-terminal fallback.
-                if !split {
-                    render_heading(buf, rect, name, dimmed, theme);
-                }
-            }
+            Row::Category { category } => render_heading(buf, rect, category.label(), false, theme),
+            Row::Section { name, .. } => render_heading(buf, rect, name, false, theme),
             Row::Setting { key, meta } => {
                 let key = *key;
                 let Some(meta) = state.registry.all().get(*meta) else {
                     continue;
                 };
-                let selected = row == state.selected && !section_focus;
+                let selected = row == state.selected;
                 let style = RowStyle {
                     selected,
                     hovered: hover == Some(row),
-                    dimmed: dimmed && !selected,
+                    dimmed: false,
                 };
                 let value_rect = render_setting_row(
                     buf,
@@ -347,81 +297,6 @@ fn render_no_matches(buf: &mut Buffer, area: Rect, state: &PiSettingsState, them
     );
 }
 
-/// Row index range `[first, last]` of the section under the cursor, including
-/// its heading row. Rows outside it render dimmed.
-fn active_section_range(sections: &[(&'static str, usize)], active: usize) -> (usize, usize) {
-    let first = sections[active].1;
-    let last = sections
-        .get(active + 1)
-        .map(|(_, next)| next.saturating_sub(1))
-        .unwrap_or(usize::MAX);
-    // The section's heading row sits directly above its first setting.
-    (first.saturating_sub(1), last)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn render_sidebar(
-    buf: &mut Buffer,
-    area: Rect,
-    sidebar_w: u16,
-    sections: &[(&'static str, usize)],
-    active: usize,
-    state: &mut PiSettingsState,
-    theme: &Theme,
-) {
-    buf.set_style(area, Style::default().bg(theme.bg_base));
-    let separator = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
-    for row in 0..area.height {
-        buf.set_span(
-            area.x + sidebar_w,
-            area.y + row,
-            &Span::styled(SIDEBAR_SEPARATOR, separator),
-            SIDEBAR_SEPARATOR_W,
-        );
-    }
-
-    let name_w = sidebar_w.saturating_sub(SIDEBAR_INDENT + SIDEBAR_GAP);
-    state.sidebar_rects.resize(sections.len(), Rect::default());
-    for (i, (name, _)) in sections.iter().enumerate() {
-        if i as u16 >= area.height {
-            break;
-        }
-        let rect = Rect {
-            x: area.x,
-            y: area.y + i as u16,
-            width: sidebar_w,
-            height: 1,
-        };
-        state.sidebar_rects[i] = rect;
-        let is_active = i == active;
-        let focused = is_active && state.section_focus;
-        // With section focus the cursor parks here, so the sidebar becomes the
-        // single focus indicator.
-        let cursor = if focused {
-            format!("{} ", crate::glyphs::chevron())
-        } else {
-            " ".repeat(SIDEBAR_INDENT as usize)
-        };
-        let style = match (is_active, focused) {
-            (_, true) => Style::default()
-                .fg(theme.text_primary)
-                .bg(theme.bg_visual)
-                .add_modifier(Modifier::BOLD),
-            (true, false) => Style::default()
-                .fg(theme.accent_user)
-                .bg(theme.bg_base)
-                .add_modifier(Modifier::BOLD),
-            (false, false) => Style::default().fg(theme.gray).bg(theme.bg_base),
-        };
-        if focused {
-            buf.set_style(rect, Style::default().bg(theme.bg_visual));
-        }
-        let text = format!("{cursor}{}", truncate_str(name, name_w as usize));
-        let w = (text.width() as u16).min(sidebar_w);
-        buf.set_span(rect.x, rect.y, &Span::styled(&text, style), w);
-    }
-}
-
 /// Minimal scroll that keeps the focus on screen, pulling in the heading above
 /// it when the focus would otherwise sit on the first line.
 fn clamp_scroll(state: &PiSettingsState, viewport: usize) -> usize {
@@ -440,7 +315,7 @@ fn clamp_scroll(state: &PiSettingsState, viewport: usize) -> usize {
         && position > 0
         && matches!(
             state.rows[state.visible[position - 1]],
-            Row::Tab { .. } | Row::Section { .. }
+            Row::Category { .. } | Row::Section { .. }
         )
     {
         scroll = position - 1;
@@ -470,7 +345,7 @@ fn render_description(buf: &mut Buffer, area: Rect, state: &PiSettingsState, the
     let Some((key, meta)) = state.focused() else {
         return;
     };
-    let wrap_w = area.width.saturating_sub(SIDEBAR_INDENT);
+    let wrap_w = area.width.saturating_sub(DESCRIPTION_INDENT);
     if wrap_w == 0 {
         return;
     }
@@ -506,7 +381,7 @@ fn render_description(buf: &mut Buffer, area: Rect, state: &PiSettingsState, the
         };
         let w = (text.width() as u16).min(wrap_w);
         buf.set_span(
-            area.x + SIDEBAR_INDENT,
+            area.x + DESCRIPTION_INDENT,
             area.y + i as u16,
             &Span::styled(text, style),
             w,
@@ -1070,12 +945,6 @@ fn shortcut(label: &'static str) -> Shortcut<'static> {
 /// Footer hints for the current mode.
 fn build_shortcuts(state: &PiSettingsState) -> Vec<Shortcut<'static>> {
     match state.mode.kind() {
-        ModeKind::Browse if state.section_focus => vec![
-            shortcut("\u{2191}/\u{2193} jump sections"),
-            shortcut("Tab/Enter settings"),
-            shortcut("\u{2190}/\u{2192} tabs"),
-            shortcut("Esc close"),
-        ],
         ModeKind::Browse => {
             // A locked row accepts neither the edit keys nor `d`, so it
             // advertises neither; the reason shows in the description block.
@@ -1091,10 +960,6 @@ fn build_shortcuts(state: &PiSettingsState) -> Vec<Shortcut<'static>> {
                     }
                     _ => shortcut("Enter edit"),
                 });
-            }
-            hints.push(shortcut("\u{2190}/\u{2192} tabs"));
-            if state.sections().len() >= 2 {
-                hints.push(shortcut("Tab sections"));
             }
             hints.push(shortcut("/ search"));
             if !locked {

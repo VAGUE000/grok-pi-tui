@@ -441,7 +441,8 @@ pub enum ActiveModal {
     Settings {
         state: Box<crate::views::settings_modal::SettingsModalState>,
     },
-    /// grok-pi settings panel (F2). Boxed — large state.
+    /// Legacy grok-pi settings panel state. Normal F2 and `/settings` opens
+    /// `ActiveModal::Settings` so the canonical Grok surface is used.
     PiSettings {
         state: Box<crate::views::pi_settings::PiSettingsState>,
     },

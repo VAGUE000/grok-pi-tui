@@ -1,5 +1,24 @@
 //! Tests for settings setters, toggles, resets, and rollback.
 use super::*;
+
+#[test]
+fn pi_settings_route_uses_the_canonical_grok_settings_modal() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+
+    let effects = dispatch(Action::OpenPiSettings, &mut app);
+
+    assert!(effects.is_empty());
+    assert!(matches!(
+        &app.agents[&id].active_modal,
+        Some(crate::views::modal::ActiveModal::Settings { .. })
+    ));
+    assert!(!matches!(
+        &app.agents[&id].active_modal,
+        Some(crate::views::modal::ActiveModal::PiSettings { .. })
+    ));
+}
+
 /// `Action::ToggleVimMode` flips the active agent's `vim_mode` field,
 /// updates the in-process pager cache so future agents pick it up
 /// via `load_vim_mode`, emits `Effect::PersistSetting` so the new
