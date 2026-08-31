@@ -1280,6 +1280,34 @@ pub(in crate::app::dispatch) fn set_follow_up_behavior(
     }]
 }
 
+pub(super) fn set_cancel_turn_key_inner(app: &mut AppView, value: &str) {
+    let canonical = if value == "ctrl_c" { "ctrl_c" } else { "esc" };
+    app.current_ui.cancel_turn_key = Some(canonical.to_string());
+    crate::app::ESC_CANCELS_TURN.store(canonical == "esc", std::sync::atomic::Ordering::Release);
+}
+
+/// SHARED: live cancellation gesture + `[ui].cancel_turn_key` persistence.
+pub(in crate::app::dispatch) fn set_cancel_turn_key(
+    app: &mut AppView,
+    value: String,
+) -> Vec<Effect> {
+    let canonical = if value == "ctrl_c" { "ctrl_c" } else { "esc" };
+    let prev = app.current_ui.cancel_turn_key();
+    if prev == canonical && app.current_ui.cancel_turn_key.is_some() {
+        return vec![];
+    }
+    set_cancel_turn_key_inner(app, canonical);
+    refresh_open_settings_modals(app);
+    tracing::info!(target: "settings", key = "cancel_turn_key", value = canonical, "setting changed");
+    let label = if canonical == "esc" { "Esc" } else { "Ctrl+C" };
+    app.show_toast(&format!("\u{2713} Cancel running turn: {label}"));
+    vec![Effect::PersistSetting {
+        key: "cancel_turn_key",
+        value: crate::settings::SettingValue::Enum(canonical),
+        rollback_value: crate::settings::SettingValue::Enum(prev),
+    }]
+}
+
 /// State-only mutation for `simple_mode`.
 ///
 /// Propagates to every agent's `input_mode` so the toggle takes
@@ -2330,6 +2358,7 @@ pub(in crate::app::dispatch) fn set_pi_builtin_tool(
     let current = match tool {
         PiBuiltinTool::Read => &mut app.current_ui.pi_builtin_tools.read,
         PiBuiltinTool::Bash => &mut app.current_ui.pi_builtin_tools.bash,
+        PiBuiltinTool::PowerShell => &mut app.current_ui.pi_builtin_tools.powershell,
         PiBuiltinTool::Edit => &mut app.current_ui.pi_builtin_tools.edit,
         PiBuiltinTool::Write => &mut app.current_ui.pi_builtin_tools.write,
         PiBuiltinTool::Grep => &mut app.current_ui.pi_builtin_tools.grep,
@@ -2348,6 +2377,7 @@ pub(in crate::app::dispatch) fn set_pi_builtin_tool(
         match tool {
             PiBuiltinTool::Read => "read",
             PiBuiltinTool::Bash => "bash",
+            PiBuiltinTool::PowerShell => "powershell",
             PiBuiltinTool::Edit => "edit",
             PiBuiltinTool::Write => "write",
             PiBuiltinTool::Grep => "grep",

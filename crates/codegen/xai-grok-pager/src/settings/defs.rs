@@ -301,6 +301,19 @@ const FOLLOW_UP_BEHAVIOR_CHOICES: &[EnumChoice] = &[
     },
 ];
 
+const CANCEL_TURN_KEY_CHOICES: &[EnumChoice] = &[
+    EnumChoice {
+        canonical: "esc",
+        display: "Esc",
+        description: "Esc cancels a running turn (default). Ctrl+C still works.",
+    },
+    EnumChoice {
+        canonical: "ctrl_c",
+        display: "Ctrl+C",
+        description: "Esc is swallowed while a turn runs; Ctrl+C is required to cancel.",
+    },
+];
+
 // ---------------------------------------------------------------------------
 // Mermaid-rendering catalog.
 //
@@ -638,6 +651,8 @@ const BTW_MODELS_CHILDREN: &[&str] = &["btw_model", "btw_model_2", "btw_model_3"
 const PI_BUILTIN_TOOLS_CHILDREN: &[&str] = &[
     "pi_builtin_tools.read",
     "pi_builtin_tools.bash",
+    #[cfg(windows)]
+    "pi_builtin_tools.powershell",
     "pi_builtin_tools.edit",
     "pi_builtin_tools.write",
     "pi_builtin_tools.grep",
@@ -786,6 +801,31 @@ pub fn default_settings() -> Vec<SettingMeta> {
             kind: SettingKind::Enum {
                 default: ui_default.follow_up_behavior(),
                 choices: FOLLOW_UP_BEHAVIOR_CHOICES,
+                supports_preview: false,
+            },
+            restart_required: false,
+            hidden_in_minimal: false,
+            external_only: false,
+        },
+        SettingMeta {
+            key: "cancel_turn_key",
+            category: SettingCategory::Editor,
+            owner: SettingOwner::Shared,
+            label: "Cancel running turn",
+            description: "Choose whether Esc cancels a running turn or Ctrl+C is required. \
+                          Default: Esc.",
+            keywords: &[
+                "cancel",
+                "stop",
+                "interrupt",
+                "esc",
+                "escape",
+                "ctrl+c",
+                "key",
+            ],
+            kind: SettingKind::Enum {
+                default: ui_default.cancel_turn_key(),
+                choices: CANCEL_TURN_KEY_CHOICES,
                 supports_preview: false,
             },
             restart_required: false,
@@ -1828,9 +1868,20 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Plan mode",
-            description: "Suggest plan mode (Ctrl+Shift+T) when your prompt looks like a \
-                          planning request.",
-            keywords: &["plan", "mode", "nudge", "ctrl+shift+t", "hint"],
+            description: if cfg!(windows) {
+                "Suggest plan mode (Ctrl+Alt+T or /plan-mode) when your prompt looks like a planning request."
+            } else {
+                "Suggest plan mode (Ctrl+Shift+T or /plan-mode) when your prompt looks like a planning request."
+            },
+            keywords: &[
+                "plan",
+                "mode",
+                "nudge",
+                "ctrl+shift+t",
+                "ctrl+alt+t",
+                "plan-mode",
+                "hint",
+            ],
             kind: SettingKind::Bool {
                 default: ui_default.contextual_hints.plan_mode.unwrap_or(true),
             },
@@ -2082,6 +2133,8 @@ pub fn default_settings() -> Vec<SettingMeta> {
                 "tools",
                 "read",
                 "bash",
+                "powershell",
+                "pwsh",
                 "edit",
                 "write",
                 "grep",
@@ -2122,6 +2175,21 @@ pub fn default_settings() -> Vec<SettingMeta> {
             keywords: &["pi", "tool", "bash", "shell"],
             kind: SettingKind::Bool {
                 default: ui_default.pi_builtin_tools.bash,
+            },
+            restart_required: true,
+            hidden_in_minimal: false,
+            external_only: true,
+        },
+        #[cfg(windows)]
+        SettingMeta {
+            key: "pi_builtin_tools.powershell",
+            category: SettingCategory::Agent,
+            owner: SettingOwner::Shell,
+            label: "PowerShell",
+            description: "Allow Pi to run PowerShell commands. PowerShell 7 (pwsh) is preferred, with Windows PowerShell as fallback.",
+            keywords: &["pi", "tool", "powershell", "pwsh", "windows", "shell"],
+            kind: SettingKind::Bool {
+                default: ui_default.pi_builtin_tools.powershell,
             },
             restart_required: true,
             hidden_in_minimal: false,

@@ -9,6 +9,33 @@
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-31
+
+### 新增
+
+- Unix 与 Windows 安装器新增 `pig` 短别名，与现有 `pi-grok` 一并指向 `grok-pi`。
+- Windows 现已在 grok-pi 原生工具/设置表面暴露内置 PowerShell 工具。
+- Windows 现已开放 Plan mode 命令及相关原生 Pager 交互入口。
+- F2 设置新增运行中 turn 的取消键选择，可在 `Esc` 与 `Ctrl+C` 间切换，实时生效并持久化为 `[ui].cancel_turn_key`。
+- macOS 下 `Opt+Shift+V` 可强制把剪贴板文本保存为临时附件；Read 工具打开图片文件时，在支持 Kitty/iTerm2 图形协议的终端中可直接在 block viewer 内显示图片。
+
+### 修复
+
+- Pi RPC 扩展对话框现在保持 Pi 原生取消语义：`Esc` 会直接取消阻塞对话框，文本输入/编辑态下 `Ctrl+C` 也会直接取消，不再把对话框 park 到 Pager scrollback。
+- 取消运行中的 turn 现在会中断前台 Bash/Eval 工作，不再让工具进程脱离 Pager 状态继续运行。
+- 浅色主题下，原生与软件 prompt cursor 统一使用主题正文色，避免从深色主题切换后仍残留突兀的高对比 accent cursor。
+- Timeline 侧栏把持久化 compaction summary 作为一等 marker，支持摘要预览并可直接跳到压缩边界。
+- 由 assistant 模型片段产生的 tool usage 会保留到实时与 replay 的 ACP tool call，不再在工具执行前丢失。
+
+### 变更
+
+- grok-pi 会先进入原生 Pager 首屏，再在 Pager 启动表面之后完成 Pi RPC、兼容性检查与 extension self-heal，避免 bootstrap 阻塞终端首屏。
+- 完成的 Plan-mode 文档改存到 session 的 `plans/` 目录，并在审批前规范化为带 session、model、cwd 与 overview 的确定性 YAML metadata。
+- 大段粘贴确认默认改为保存成临时附件，同时保留显式的“Paste normally”选项。
+- 折叠的同类工具组可通过现有 hover popup 查看成员详情，无需先展开 transcript 中的整组调用。
+
+## [0.1.2] - 2026-08-25
+
 ### 新增
 
 - 可选启用的 **Subagents V2 团队协作**：支持可配置 agent 定义、内置 implementation/research/review 团队、team-aware runtime 与 transport、配置 UI、兼容性测试，以及中英文使用/架构文档。

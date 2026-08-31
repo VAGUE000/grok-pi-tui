@@ -914,6 +914,10 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
             tool: crate::app::actions::PiBuiltinTool::Bash,
             enabled: new,
         }),
+        "pi_builtin_tools.powershell" => Some(Action::SetPiBuiltinTool {
+            tool: crate::app::actions::PiBuiltinTool::PowerShell,
+            enabled: new,
+        }),
         "pi_builtin_tools.edit" => Some(Action::SetPiBuiltinTool {
             tool: crate::app::actions::PiBuiltinTool::Edit,
             enabled: new,
@@ -1080,6 +1084,10 @@ pub(super) fn action_for_enum_commit(key: SettingKey, choice: &'static str) -> O
         }
         "follow_up_behavior" => crate::appearance::FollowUpBehavior::from_canonical(choice)
             .map(Action::SetFollowUpBehavior),
+        "cancel_turn_key" => match choice {
+            "esc" | "ctrl_c" => Some(Action::SetCancelTurnKey(choice.to_string())),
+            _ => None,
+        },
         "default_selected_permission" => {
             Some(Action::SetDefaultSelectedPermission(choice.to_string()))
         }

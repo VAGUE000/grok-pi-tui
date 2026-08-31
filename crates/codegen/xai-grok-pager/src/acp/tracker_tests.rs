@@ -77,6 +77,99 @@ fn user_message(text: &str) -> acp::SessionUpdate {
         acp::TextContent::new(text.to_string()),
     )))
 }
+
+#[test]
+fn tool_trace_preserves_acp_input_output_usage_and_timing() {
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    let mut tool_meta = acp::Meta::new();
+    tool_meta.insert(
+        "piToolUsage".into(),
+        serde_json::json!({
+            "input": 101,
+            "output": 23,
+            "cacheRead": 17,
+            "cost": 0.01
+        }),
+    );
+    let start = acp::SessionUpdate::ToolCall(
+        acp::ToolCall::new(acp::ToolCallId::new(Arc::from("trace-1")), "read")
+            .kind(acp::ToolKind::Read)
+            .status(acp::ToolCallStatus::InProgress)
+            .raw_input(Some(serde_json::json!({ "path": "README.md" })))
+            .meta(Some(tool_meta)),
+    );
+    let start_meta = NotificationMeta {
+        total_tokens: Some(900),
+        agent_timestamp_ms: Some(1_200),
+        stream_start_ms: Some(1_000),
+        ..Default::default()
+    };
+    assert!(tracker.handle_update(start, &start_meta, &mut sb));
+    let trace = &sb.get(0).expect("tool entry").tool_traces[0];
+    assert_eq!(trace.tool_call_id, "trace-1");
+    assert_eq!(
+        trace
+            .raw_input
+            .as_ref()
+            .and_then(|v| v.get("path"))
+            .and_then(|v| v.as_str()),
+        Some("README.md")
+    );
+    assert_eq!(
+        trace
+            .usage
+            .as_ref()
+            .and_then(|v| v.get("input"))
+            .and_then(|v| v.as_u64()),
+        Some(101)
+    );
+    assert_eq!(trace.context_tokens, Some(900));
+    assert_eq!(trace.started_at_ms, Some(1_200));
+
+    let completed = acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+        acp::ToolCallId::new(Arc::from("trace-1")),
+        acp::ToolCallUpdateFields::new()
+            .status(Some(acp::ToolCallStatus::Completed))
+            .raw_output(Some(serde_json::json!({ "content": "hello" }))),
+    ));
+    let end_meta = NotificationMeta {
+        total_tokens: Some(925),
+        agent_timestamp_ms: Some(1_350),
+        stream_start_ms: Some(1_000),
+        ..Default::default()
+    };
+    assert!(tracker.handle_update(completed, &end_meta, &mut sb));
+    let trace = &sb.get(0).expect("completed tool entry").tool_traces[0];
+    assert_eq!(trace.status, "Completed");
+    assert_eq!(
+        trace
+            .raw_output
+            .as_ref()
+            .and_then(|v| v.get("content"))
+            .and_then(|v| v.as_str()),
+        Some("hello")
+    );
+    assert_eq!(
+        trace
+            .usage
+            .as_ref()
+            .and_then(|v| v.get("output"))
+            .and_then(|v| v.as_u64()),
+        Some(23)
+    );
+    assert_eq!(trace.context_tokens, Some(925));
+    assert_eq!(trace.started_at_ms, Some(1_200));
+    assert_eq!(trace.updated_at_ms, Some(1_350));
+    let content =
+        crate::scrollback::entry::format_tool_traces_split(&sb.get(0).unwrap().tool_traces);
+    assert!(content.input.contains("## Input"));
+    assert!(content.output.contains("## Output"));
+    assert!(content.input.contains("## LLM segment usage"));
+    assert!(content.input.contains("**Started:**"));
+    assert!(!content.input.contains("UTC ms"));
+}
+
 #[test]
 fn streaming_agent_message() {
     let mut sb = ScrollbackState::new();
@@ -2261,6 +2354,49 @@ fn activity_tool_running_when_tool_pending() {
             description: None,
         })
     );
+}
+
+#[test]
+fn message_interruptible_foreground_tool_uses_wire_meta_and_excludes_background() {
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    let mut tool_meta = acp::Meta::new();
+    tool_meta.insert(
+        "x.ai/tool".to_string(),
+        serde_json::json!({ "name": "bash" }),
+    );
+    tracker.handle_update(
+        acp::SessionUpdate::ToolCall(
+            acp::ToolCall::new(acp::ToolCallId::new(Arc::from("tc-bash")), "sleep 30")
+                .kind(acp::ToolKind::Execute)
+                .status(acp::ToolCallStatus::Pending)
+                .raw_input(Some(serde_json::json!({ "command": "sleep 30" })))
+                .content(vec![])
+                .locations(vec![])
+                .meta(Some(tool_meta)),
+        ),
+        &meta(),
+        &mut sb,
+    );
+    assert!(tracker.message_interruptible_foreground_tool_running());
+
+    tracker.handle_update(tool_update_completed("tc-bash"), &meta(), &mut sb);
+    tracker.handle_update(
+        acp::SessionUpdate::ToolCall(
+            acp::ToolCall::new(acp::ToolCallId::new(Arc::from("tc-eval-bg")), "eval")
+                .kind(acp::ToolKind::Other)
+                .status(acp::ToolCallStatus::Pending)
+                .raw_input(Some(serde_json::json!({
+                    "code": "await sleep(30)",
+                    "is_background": true
+                })))
+                .content(vec![])
+                .locations(vec![]),
+        ),
+        &meta(),
+        &mut sb,
+    );
+    assert!(!tracker.message_interruptible_foreground_tool_running());
 }
 /// Foreground execute tools often carry a human `description` in raw_input
 /// (e.g. sleep with "Wait 5 seconds…"). Surface it for the spinner.

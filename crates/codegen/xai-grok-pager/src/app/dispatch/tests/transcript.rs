@@ -86,6 +86,45 @@ fn open_block_viewer_on_group_header_toggles_group() {
 }
 
 #[test]
+fn open_block_viewer_does_not_open_failed_tool_trace() {
+    use crate::scrollback::blocks::tool::search::SearchToolCallBlock;
+    use crate::scrollback::entry::ToolTraceSnapshot;
+
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let agent = app.agents.get_mut(&id).unwrap();
+    let entry_id = agent
+        .scrollback
+        .push_block(RenderBlock::ToolCall(ToolCallBlock::Search(
+            SearchToolCallBlock::new("needle").with_error("boom"),
+        )));
+    let entry = agent.scrollback.get_by_id_mut(entry_id).unwrap();
+    entry.tool_traces.push(ToolTraceSnapshot {
+        tool_call_id: "failed-search".into(),
+        title: "search".into(),
+        status: "Failed".into(),
+        raw_input: Some(serde_json::json!({"query": "needle"})),
+        raw_output: Some(serde_json::json!({"error": "boom"})),
+        usage: None,
+        context_tokens: None,
+        stream_start_ms: None,
+        started_at_ms: None,
+        updated_at_ms: None,
+    });
+    assert!(!entry.block.has_normal_fullscreen_viewer());
+    agent.scrollback.set_selected(Some(0));
+
+    let effects = dispatch(Action::OpenBlockViewer, &mut app);
+    assert!(effects.is_empty());
+    let agent = app.agents.get(&id).unwrap();
+    assert!(agent.block_viewer.is_none());
+    assert!(
+        agent.active_modal.is_none(),
+        "Enter/OpenBlockViewer must not open ToolTraceViewer; collapsed tool traces are opened by Left/Collapse"
+    );
+}
+
+#[test]
 fn open_block_viewer_opens_eval_block() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);

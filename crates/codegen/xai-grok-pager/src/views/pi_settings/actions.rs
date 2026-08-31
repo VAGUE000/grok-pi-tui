@@ -29,6 +29,10 @@ pub(super) fn action_for_bool(key: SettingKey, new: bool) -> Option<Action> {
             tool: PiBuiltinTool::Bash,
             enabled: new,
         },
+        "pi_builtin_tools.powershell" => Action::SetPiBuiltinTool {
+            tool: PiBuiltinTool::PowerShell,
+            enabled: new,
+        },
         "pi_builtin_tools.edit" => Action::SetPiBuiltinTool {
             tool: PiBuiltinTool::Edit,
             enabled: new,
@@ -174,6 +178,10 @@ pub(super) fn action_for_enum_commit(key: SettingKey, choice: &str) -> Option<Ac
         "scroll_mode" => {
             crate::appearance::ScrollMode::from_canonical(choice).map(Action::SetScrollMode)
         }
+        "cancel_turn_key" => match choice {
+            "esc" | "ctrl_c" => Some(Action::SetCancelTurnKey(choice.to_string())),
+            _ => None,
+        },
         "default_selected_permission" => {
             Some(Action::SetDefaultSelectedPermission(choice.to_string()))
         }

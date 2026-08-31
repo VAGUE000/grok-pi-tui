@@ -512,15 +512,7 @@ impl AgentView {
         let Some(hover_idx) = self.hovered_entry else {
             return false;
         };
-        self.scrollback.get(hover_idx).is_some_and(|entry| {
-            entry.display_mode == crate::scrollback::types::DisplayMode::Collapsed
-                && matches!(
-                    &entry.block,
-                    crate::scrollback::block::RenderBlock::ToolCall(
-                        crate::scrollback::blocks::tool::ToolCallBlock::Edit(_)
-                    )
-                )
-        })
+        crate::views::agent::write_edit_hover_popup_target(&self.scrollback, hover_idx)
     }
 
     pub(crate) fn needs_write_edit_hover_popup_tick(&self) -> bool {
@@ -536,16 +528,7 @@ impl AgentView {
         let Some(hover_idx) = self.hovered_entry else {
             return false;
         };
-        let Some(entry) = self.scrollback.get(hover_idx) else {
-            return false;
-        };
-        entry.display_mode == crate::scrollback::types::DisplayMode::Collapsed
-            && matches!(
-                &entry.block,
-                crate::scrollback::block::RenderBlock::ToolCall(
-                    crate::scrollback::blocks::tool::ToolCallBlock::Edit(_)
-                )
-            )
+        crate::views::agent::write_edit_hover_popup_target(&self.scrollback, hover_idx)
     }
 
     fn handle_write_edit_hover_popup_scroll(&mut self, lines: i32, col: u16, row: u16) -> bool {
@@ -561,18 +544,7 @@ impl AgentView {
         let Some(hover_idx) = self.hovered_entry else {
             return false;
         };
-        let Some(entry) = self.scrollback.get(hover_idx) else {
-            return false;
-        };
-        if entry.display_mode != crate::scrollback::types::DisplayMode::Collapsed {
-            return false;
-        }
-        if !matches!(
-            &entry.block,
-            crate::scrollback::block::RenderBlock::ToolCall(
-                crate::scrollback::blocks::tool::ToolCallBlock::Edit(_)
-            )
-        ) {
+        if !crate::views::agent::write_edit_hover_popup_target(&self.scrollback, hover_idx) {
             return false;
         }
         let Some((entry_area, _, _)) = self
@@ -649,6 +621,24 @@ impl AgentView {
                     };
                     state.scroll_offset = Some(new_offset);
                     state.hovered = None;
+                    return;
+                }
+                ActiveModal::ToolTraceViewer {
+                    input_scroll,
+                    output_scroll,
+                    input_area,
+                    output_area,
+                    ..
+                } => {
+                    if let Some(pane) =
+                        crate::views::modal::tool_trace_pane_at(*input_area, *output_area, col, row)
+                    {
+                        let scroll = match pane {
+                            crate::views::modal::ToolTracePane::Input => input_scroll,
+                            crate::views::modal::ToolTracePane::Output => output_scroll,
+                        };
+                        crate::views::modal::apply_doc_scroll_delta(scroll, lines);
+                    }
                     return;
                 }
                 ActiveModal::DocViewer { scroll, .. }

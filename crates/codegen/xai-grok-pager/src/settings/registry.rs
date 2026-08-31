@@ -598,6 +598,7 @@ pub fn current_value_for(
         "show_timeline" => Some(SettingValue::Bool(ui.show_timeline_enabled())),
         "pi_builtin_tools.read" => Some(SettingValue::Bool(ui.pi_builtin_tools.read)),
         "pi_builtin_tools.bash" => Some(SettingValue::Bool(ui.pi_builtin_tools.bash)),
+        "pi_builtin_tools.powershell" => Some(SettingValue::Bool(ui.pi_builtin_tools.powershell)),
         "pi_builtin_tools.edit" => Some(SettingValue::Bool(ui.pi_builtin_tools.edit)),
         "pi_builtin_tools.write" => Some(SettingValue::Bool(ui.pi_builtin_tools.write)),
         "pi_builtin_tools.grep" => Some(SettingValue::Bool(ui.pi_builtin_tools.grep)),
@@ -648,6 +649,7 @@ pub fn current_value_for(
         "follow_up_behavior" => Some(SettingValue::Enum(
             crate::appearance::cache::load_follow_up_behavior().as_canonical(),
         )),
+        "cancel_turn_key" => Some(SettingValue::Enum(ui.cancel_turn_key())),
         "confirm_before_rewind" => Some(SettingValue::Bool(ui.confirm_before_rewind_enabled())),
         "simple_mode" => Some(SettingValue::Bool(ui.simple_mode.unwrap_or(true))),
         // Per-tip contextual hints — `None` (inherit) reads as the default ON.
@@ -1009,6 +1011,9 @@ mod tests {
                 ("pi_builtin_tools.bash", SettingKind::Bool { default }) => {
                     assert_eq!(*default, ui.pi_builtin_tools.bash);
                 }
+                ("pi_builtin_tools.powershell", SettingKind::Bool { default }) => {
+                    assert_eq!(*default, ui.pi_builtin_tools.powershell);
+                }
                 ("pi_builtin_tools.edit", SettingKind::Bool { default }) => {
                     assert_eq!(*default, ui.pi_builtin_tools.edit);
                 }
@@ -1079,6 +1084,13 @@ mod tests {
                         *default,
                         ui.follow_up_behavior(),
                         "follow_up_behavior default drifts from UiConfig::default()"
+                    );
+                }
+                ("cancel_turn_key", SettingKind::Enum { default, .. }) => {
+                    assert_eq!(
+                        *default,
+                        ui.cancel_turn_key(),
+                        "cancel_turn_key default drifts from UiConfig::default()"
                     );
                 }
                 ("simple_mode", SettingKind::Bool { default }) => {

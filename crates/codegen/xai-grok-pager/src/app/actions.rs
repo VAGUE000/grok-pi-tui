@@ -110,6 +110,7 @@ pub enum SwitchModelError {
 pub enum PiBuiltinTool {
     Read,
     Bash,
+    PowerShell,
     Edit,
     Write,
     Grep,
@@ -704,6 +705,9 @@ pub enum Action {
     /// Mid-turn follow-up routing (`queue` | `steer`).
     /// SHARED-owned: `[ui].follow_up_behavior`.
     SetFollowUpBehavior(crate::appearance::FollowUpBehavior),
+    /// Running-turn cancellation gesture (`esc` | `ctrl_c`). SHARED-owned,
+    /// live-applied and persisted to `[ui].cancel_turn_key`.
+    SetCancelTurnKey(String),
     /// Set simple mode (ASCII / minimal glyphs). Persists via `Effect::PersistSetting`.
     SetSimpleMode(bool),
     /// Set the per-tip contextual-hint user config (`[ui.contextual_hints]`).
@@ -1108,12 +1112,13 @@ pub enum Action {
     DashboardDelete,
     /// Cycle the dispatch input's mode for the next spawned agent.
     /// Pi uses Normal ↔ Plan; stock Grok retains its wider mode ring.
-    /// Bound to Ctrl+Shift+T so Shift+Tab remains the thinking shortcut.
+    /// Uses Ctrl+Alt+T on Windows and Ctrl+Shift+T elsewhere so Shift+Tab
+    /// remains the thinking shortcut.
     DashboardCycleMode,
     /// Cycle the PEEKED agent's live mode — the peek-panel counterpart to
     /// [`Self::DashboardCycleMode`]. Unlike the staged dispatch mode, this
-    /// changes the existing agent directly. Emitted by Ctrl+Shift+T while the
-    /// peek panel is open.
+    /// changes the existing agent directly. Emitted by the platform Plan
+    /// shortcut while the peek panel is open.
     DashboardPeekCycleMode,
     /// Toggle grouping (State ↔ Directory).
     DashboardToggleGrouping,
@@ -1473,8 +1478,8 @@ impl PlanModeKind {
 /// as a stop, so new variants need no shell change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelTrigger {
-    /// Wire value `"esc"` (bare Esc mid-turn cancel in minimal / non-vim
-    /// mode, plus the Esc cancel-retry while TurnCancelling).
+    /// Wire value `"esc"` (bare Esc mid-turn cancel when enabled by the F2
+    /// cancellation policy, plus the Esc cancel-retry while TurnCancelling).
     Esc,
     /// `Ctrl+C` pressed (the default cancel keybinding).
     CtrlC,

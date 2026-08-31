@@ -339,6 +339,16 @@ impl AgentView {
         if key.code == KeyCode::Esc {
             return self.handle_card_esc();
         }
+        // Pi's `tui.select.cancel` defaults to both Escape and Ctrl+C for all
+        // stock extension dialogs, including input/editor while text is active.
+        if key!('c', CONTROL).matches(key)
+            && self
+                .question_view
+                .as_ref()
+                .is_some_and(crate::views::question_view::QuestionViewState::is_pi_extension_ui)
+        {
+            return self.submit_question_answers(true);
+        }
         let Some(ref mut qv) = self.question_view else {
             return InputOutcome::Unchanged;
         };
@@ -358,6 +368,10 @@ impl AgentView {
                     qv.focus = QuestionFocus::Navigation;
                     self.last_prompt_click_ms = None;
                     return InputOutcome::Changed;
+                }
+                if qv.is_feedback_report() && crate::input::key::is_force_attachment_paste_key(key)
+                {
+                    return self.handle_force_attachment_paste_key();
                 }
                 if qv.is_feedback_report() && crate::input::key::is_paste_key(key) {
                     let clipboard_text = crate::app::actions::ClipboardTextRead::from_result(
